@@ -3,7 +3,12 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass
 
+import onnx
 import pandas as pd
+import torch
+from omlt import OmltBlock
+from omlt.io import load_onnx_neural_network
+from omlt.neuralnet import FullSpaceNNFormulation
 from pyomo.environ import Constraint
 
 
@@ -16,14 +21,6 @@ class OmltSurrogateBuilder:
     input_bounds: dict[str, tuple[float, float]]
 
     def populate_block(self, block, component_name, input_vars, output_vars):
-        try:
-            from omlt import OmltBlock
-            from omlt.neuralnet import FullSpaceNNFormulation
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError(
-                "The OMLT backend requires the optional 'omlt' dependency."
-            ) from exc
-
         block.add_component(component_name, OmltBlock())
         omlt_block = getattr(block, component_name)
         omlt_block.build_formulation(FullSpaceNNFormulation(self.network_definition))
@@ -47,10 +44,9 @@ class OmltSurrogateBuilder:
         )
 
     def evaluate_surrogate(self, inputs: pd.DataFrame):
-        torch = _import_torch()
         with torch.no_grad():
             x = torch.as_tensor(
-                inputs[self.input_labels].to_numpy(),
+                inputs[self.input_labels].to_numpy().copy(),
                 dtype=torch.float64,
             )
             y = self.torch_model(x).detach().numpy()
@@ -67,15 +63,12 @@ def build_omlt_surrogate(
     learning_rate: float = 1e-2,
     epochs: int = 2000,
 ):
-    torch = _import_torch()
-    network_definition_loader = _import_onnx_loader()
-
     x_data = torch.as_tensor(
-        training_data[input_labels].to_numpy(),
+        training_data[input_labels].to_numpy().copy(),
         dtype=torch.float64,
     )
     y_data = torch.as_tensor(
-        training_data[output_labels].to_numpy(),
+        training_data[output_labels].to_numpy().copy(),
         dtype=torch.float64,
     )
 
@@ -91,9 +84,7 @@ def build_omlt_surrogate(
         raise ValueError("training_method must be 'lstsq' or 'sgd'.")
 
     network_definition = _load_omlt_network_definition(
-        torch=torch,
         torch_model=torch_model,
-        network_definition_loader=network_definition_loader,
         n_inputs=len(input_labels),
         input_bounds=input_bounds,
         input_labels=input_labels,
@@ -109,7 +100,6 @@ def build_omlt_surrogate(
 
 
 def _fit_linear_lstsq(model, x_data, y_data):
-    torch = _import_torch()
     ones = torch.ones((x_data.shape[0], 1), dtype=x_data.dtype)
     design_matrix = torch.cat((x_data, ones), dim=1)
     solution = torch.linalg.lstsq(design_matrix, y_data).solution
@@ -122,7 +112,6 @@ def _fit_linear_lstsq(model, x_data, y_data):
 
 
 def _fit_linear_sgd(model, x_data, y_data, learning_rate, epochs):
-    torch = _import_torch()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = torch.nn.MSELoss()
     for _ in range(epochs):
@@ -133,9 +122,7 @@ def _fit_linear_sgd(model, x_data, y_data, learning_rate, epochs):
 
 
 def _load_omlt_network_definition(
-    torch,
     torch_model,
-    network_definition_loader,
     n_inputs,
     input_bounds,
     input_labels,
@@ -153,28 +140,9 @@ def _load_omlt_network_definition(
             onnx_file.name,
             input_names=["input"],
             output_names=["output"],
+            dynamo=False,
         )
-        return network_definition_loader(
-            onnx_file.name,
+        return load_onnx_neural_network(
+            onnx.load(onnx_file.name),
             input_bounds=scaled_input_bounds,
         )
-
-
-def _import_torch():
-    try:
-        import torch
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "The OMLT backend requires the optional 'torch' dependency."
-        ) from exc
-    return torch
-
-
-def _import_onnx_loader():
-    try:
-        from omlt.io import load_onnx_neural_network
-    except ModuleNotFoundError as exc:
-        raise ModuleNotFoundError(
-            "The OMLT backend requires the optional 'omlt' dependency."
-        ) from exc
-    return load_onnx_neural_network

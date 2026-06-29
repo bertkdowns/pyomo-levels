@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from idaes.core.surrogate.pysmo import radial_basis_function as rbf
 from idaes.core.surrogate.pysmo_surrogate import PysmoRBFTrainer, PysmoSurrogate
 from idaes.core.surrogate.surrogate_block import SurrogateBlock
-
+from .common import _maybe_suppress_stdout
 
 @dataclass
 class PysmoSurrogateBuilder:
@@ -57,6 +57,10 @@ def build_pysmo_surrogate(
 
 
 class _TemporaryFilePysmoRBFTrainer(PysmoRBFTrainer):
+    """
+    PYSMO RBF trainer saves the model to solution.pickle. This catches that temporary file when training so that
+    it doesn't get saved to disk normally or pollute the running location.
+    """
     def __init__(self, *args, output_directory, **settings):
         self._output_directory = output_directory
         super().__init__(*args, **settings)
@@ -76,9 +80,3 @@ class _TemporaryFilePysmoRBFTrainer(PysmoRBFTrainer):
         )
         model.get_feature_vector()
         return model
-
-
-def _maybe_suppress_stdout(enabled):
-    if enabled:
-        return contextlib.nullcontext()
-    return contextlib.redirect_stdout(io.StringIO())
