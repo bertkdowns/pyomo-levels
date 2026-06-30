@@ -49,7 +49,7 @@ def main():
     m.unit.x.fix(1.5)
 
     solver = SolverFactory("ipopt")
-    solver.solve(m)
+    solver.solve(m, tee=True)
 
     print(value(m.unit.y))
     print(value(m.unit.x))
